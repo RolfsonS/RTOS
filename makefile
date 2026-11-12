@@ -1,30 +1,20 @@
-MCU        = atmega2560
-F_CPU      = 16000000UL
-PORT       = /dev/ttyACM0
-BAUD       = 115200
-PROGRAMMER = wiring
+CFLAGS  ?=  -W -Wall -Wextra -Werror -Wundef -Wshadow -Wdouble-promotion \
+            -Wformat-truncation -fno-common -Wconversion \
+            -g3 -Os -ffunction-sections -fdata-sections -I. \
+            -mcpu=cortex-m4 -mthumb -mfloat-abi=hard -mfpu=fpv4-sp-d16 $(EXTRA_CFLAGS)
 
-CC      = avr-gcc
-OBJCOPY = avr-objcopy
-AVRDUDE = avrdude
+LDFLAGS ?= -Tlink.ld -nostartfiles -nostdlib --specs nano.specs -lc -lgcc -Wl,--gc-sections -Wl,-Map=$@.ma
 
-CFLAGS  = -mmcu=$(MCU) -DF_CPU=$(F_CPU) -Os -Wall
+SOURCES = main.c blink.c 
 
-TARGET = blink
-SRCS   = $(TARGET).c switch.s
+firmware.elf: $(SOURCES)
+	arm-none-eabi-gcc $(SOURCES) $(CFLAGS) $(LDFLAGS) -o $@
 
-all: $(TARGET).hex
+firmware.bin: firmware.elf
+	arm-none-eabi-objcopy -O binary $< $@
 
-$(TARGET).elf: $(SRCS)
-	$(CC) $(CFLAGS) -o $@ $(SRCS)
+flash: firmware.bin
+	st-flash --reset write $< 0x8000000
 
-$(TARGET).hex: $(TARGET).elf
-	$(OBJCOPY) -O ihex -R .eeprom $< $@
-
-flash: $(TARGET).hex
-	$(AVRDUDE) -c $(PROGRAMMER) -p $(MCU) -P $(PORT) -b $(BAUD) -D -U flash:w:$<:i
-
-clean:
-	rm -f $(TARGET).elf $(TARGET).hex
-
-.PHONY: all flash clean
+clean: 
+	rm -rf firmware.*

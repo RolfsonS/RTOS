@@ -1,116 +1,67 @@
-#define F_CPU 16000000UL
-#include <avr/io.h>
-#include <util/delay.h>
-#include <stdlib.h>
+#include <stdint.h>
+#include <stdbool.h>
 
-typedef struct tcb_t tcb;
-extern void switch_to_task(tcb*);
-tcb* current_task = NULL;
+#define BIT(x) (1UL <<(x))
+#define PIN(bank, num) ((((bank) - 'A') << 8) | (num))
+#define PINNO(pin) (pin & 255u)
+#define PINBANK(pin) (pin >> 8)
 
-/* Task control block. */
-typedef struct tcb_t {
-	/* https://gcc.gnu.org/wiki/avr-gcc */
-	/* Stack pointer is 3 bytes, and 1 byte aligned. */
-	uint16_t sp;
+typedef struct gpio_t {
+	volatile uint32_t MODER, OTYPER, OSPEEDR, PUPDR, IDR, ODR, BSRR, LCKR, AFR[2];
+} gpio;
 
-	/* Next task to run */
-	struct tcb_t* next;
-} tcb;
+typedef struct rcc_t{
+	volatile uint32_t CR, HSICFGR, CRRCR, CSICFGR, CFGR, RES1, D1CFGR, D2CFGR,
+		D3CFGR, RES2, PLLCKSELR, PLLCFGR, PLL1DIVR, PLL1FRACR, PLL2DIVR,
+		PLL2FRACR, PLL3DIVR, PLL3FRACR, RES3, D1CCIPR, D2CCIP1R, D2CCIP2R,
+		D3CCIPR, RES4, CIER, CIFR, CICR, RES5, BDCR, CSR, RES6, AHB3RSTR,
+		AHB1RSTR, AHB2RSTR, AHB4RSTR, APB3RSTR, APB1LRSTR, APB1HRSTR, APB2RSTR,
+		APB4RSTR, GCR, RES7, D3AMR, RES8[9], RSR, AHB3ENR, AHB1ENR, AHB2ENR,
+		AHB4ENR, APB3ENR, APB1LENR, APB1HENR, APB2ENR, APB4ENR, RES9, AHB3LPENR,
+		AHB1LPENR, AHB2LPENR, AHB4LPENR, APB3LPENR, APB1LLPENR, APB1HLPENR,
+		APB2LPENR, APB4LPENR;
+} rcc;
 
-void schedule() {
-	switch_to_task(current_task -> next);
+#define GPIO(bank) ((gpio*) (0x58020000 + 0x400 * (bank)))
+#define RCC	   ((rcc*)  (0x58024400))
+
+enum {
+	GPIO_MODE_INPUT,
+	GPIO_MODE_OUTPUT,
+	GPIO_MODE_AF,
+	GPIO_MODE_ANALOG,
+};
+
+/* Set the mode of a GPIO pin. 
+ * We first reset the previous mode, then set again. */
+static inline void gpio_set_mode(uint16_t pin, uint8_t mode) {
+	gpio* curr_gpio = GPIO(PINBANK(pin));
+	uint8_t pin_num = PINNO(pin);
+	curr_gpio -> MODER &= ~(3U << (pin_num * 2));
+	curr_gpio -> MODER |= (mode & 3U) << (pin_num * 2);
 }
 
-/* Blink Task 1 */
-void blink1() {
-	/* DDRx (Port: x) tells which pin in port is set to output or input.
-	 * 1 corresponds to output, 0 to input.
-	 */
-	DDRB |= (1 << PB7);
-
-	/* Loop forever */
-	while (1) {
-		/* PORTx (Port:x) control the output of that pin. High or low voltage.
-		 * 1 is high, to is low. We toggle for on/off LED.
-		 */
-		PORTB ^= (1 << PB7);
-		_delay_ms(10);
-		schedule();
-	}
-	return;
+static inline void gpio_write(uint16_t pin, bool val) {
+	gpio* curr_gpio = GPIO(PINBANK(pin));
+	curr_gpio->BSRR = BIT(PINNO(pin)) << (val ? 0 : 16);
 }
 
-
-/* Blink Task 2 */
-void blink2() {
-	/* DDRx (Port: x) tells which pin in port is set to output or input.
-	 * 1 corresponds to output, 0 to input.
-	 */
-	DDRB |= (1 << PB6);
-
-	/* Loop forever */
-	while (1) {
-		/* PORTx (Port:x) control the output of that pin. High or low voltage.
-		 * 1 is high, to is low. We toggle for on/off LED.
-		 */
-		PORTB ^= (1 << PB6);
-		_delay_ms(10);
-		schedule();
-	}
-	return;
-}	
-
-
-tcb* init_task(void (*func)(void)) {
-	tcb* new_tcb = (tcb*) malloc(sizeof(tcb));
-
-	/* Malloc 256 Bytes. */
-	new_tcb -> sp = (uint16_t) malloc(256);
-	
-	/* Cast this to a pointer... a little easier to work with */
-	uint8_t* stack = (uint8_t*) (new_tcb -> sp);
-	stack += 255;
-	uint16_t pc = (uint16_t) func;
-	/* Add the functions location to the top of the stack */
-	*stack-- = pc & 0xFF;
-	*stack-- = pc >> 8;
-	*stack-- = 0x0;
-	
-	for(int i = 0; i < 18; i++) {
-		*stack-- = 0x0;
-	} 
-		
-	new_tcb -> sp = (uint16_t) stack;
-
-	return new_tcb;
+static inline void spin(volatile uint32_t count) {
+  	while (count--) (void) 0;
 }
 
 int main(void) {
-	
-	tcb* kthread_main = (tcb*) malloc(sizeof(tcb));
-	current_task = kthread_main;
+  	uint16_t led = PIN('B', 14);
+  	RCC->AHB4ENR |= BIT(PINBANK(led));
+  	(void) RCC->AHB4ENR;
+  	gpio_set_mode(led, GPIO_MODE_OUTPUT);
+  	
+	for (;;) {
+    		gpio_write(led, true);
+    		spin(4000000);
+    		gpio_write(led, false);
+    		spin(4000000);
+ 	}
 
-	tcb* t1 = init_task(blink1);
-	tcb* t2 = init_task(blink2);
-
-	kthread_main -> next = t1;
-	t1 -> next = t2;
-	t2 -> next = kthread_main;
-
-
-	/* DDRx (Port: x) tells which pin in port is set to output or input.
-	 * 1 corresponds to output, 0 to input.
-	 */
-	DDRB |= (1 << PB5);
-
-	/* Loop forever */
-	while (1) {
-		/* PORTx (Port:x) control the output of that pin. High or low voltage.
-		 * 1 is high, to is low. We toggle for on/off LED.
-		 */
-		PORTB ^= (1 << PB5);
-		_delay_ms(10);
-		schedule();
-	}
+  	return 0;
 }
-
