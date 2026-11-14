@@ -53,7 +53,6 @@ static inline void spin(volatile uint32_t count) {
 int main(void) {
   	uint16_t led = PIN('B', 14);
   	RCC->AHB4ENR |= BIT(PINBANK(led));
-  	(void) RCC->AHB4ENR;
   	gpio_set_mode(led, GPIO_MODE_OUTPUT);
   	
 	for (;;) {
